@@ -1,0 +1,84 @@
+--3.8--
+CREATE OR REPLACE FUNCTION public.q_3_8_get_diplomas(
+	)
+    RETURNS TABLE(title character varying) 
+    LANGUAGE 'plpgsql'
+    COST 100
+    VOLATILE PARALLEL UNSAFE
+    ROWS 1000
+
+AS $BODY$
+DECLARE 
+    i int := 1;
+
+BEGIN
+WHILE (i <= (SELECT COUNT(lab_code) FROM "Lab")) LOOP
+RETURN QUERY
+SELECT d.thesis_title 
+FROM "Diploma" d
+WHERE d.amka IN (SELECT c1.student_amka
+                 FROM "Committee" c1, "Committee" c2 
+                 WHERE c1.prof_amka != c2.prof_amka
+                 AND c1.diploma_num = c2.diploma_num
+                 AND c1.prof_amka IN (SELECT amka
+                                      FROM "Professor" 
+                                      WHERE labjoins = i)
+                 AND c2.prof_amka IN (SELECT amka
+                                      FROM "Professor" 
+                                      WHERE labjoins = i));															   
+i = i+1;															   
+END LOOP;
+END;
+
+$BODY$;
+
+ALTER FUNCTION public.q_3_8_get_diplomas()
+    OWNER TO postgres;
+
+--3.9--
+CREATE OR REPLACE FUNCTION public.q_3_9_get_courses(
+	ccode character)
+    RETURNS TABLE(code_of_course character, title_of_course character) 
+    LANGUAGE 'plpgsql'
+    COST 100
+    VOLATILE PARALLEL UNSAFE
+    ROWS 1000
+
+AS $BODY$
+
+BEGIN
+
+RETURN QUERY
+SELECT DISTINCT TABLE1.anc, "Course".course_title
+FROM (
+  WITH RECURSIVE Req(anc,des,path) AS (
+  SELECT main AS anc, dependent as des, CONCAT(main,',',dependent) AS path
+  FROM "Course_depends" WHERE (mode = 'required' OR mode = 'recommended')
+  UNION
+  SELECT r.anc AS anc, d.dependent AS des, CONCAT(r.path,',',d.dependent) AS path
+  FROM Req r, "Course_depends" d
+  WHERE r.des = d.main AND (mode = 'required' OR mode = 'recommended')
+ )
+ SELECT anc FROM Req WHERE des= ccode) table1,"Course"
+WHERE table1.anc = "Course".course_code;
+
+END;
+
+$BODY$;
+
+ALTER FUNCTION public.q_3_9_get_courses(character)
+    OWNER TO postgres;
+
+--6.2--
+CREATE OR REPLACE VIEW q_6_2_get_num_of_students(entry_year, num_of_students) AS
+SELECT date_part('year',s.entry_date) AS entry_year, COUNT(*) 
+FROM "Student" s
+WHERE s.amka NOT IN (SELECT d.graduate_student_amka FROM "Diploma" d)
+AND  date_part('year', (SELECT start_date FROM "Semester" WHERE semester_status='present') ) - 
+	 date_part('year', s.entry_date) <= 10
+AND ((SELECT COUNT(*) FROM "Register" r WHERE r.amka = s.amka
+      AND r.register_status = 'pass') >= (SELECT sr.min_courses FROM "School_Rules" sr))
+AND ((SELECT SUM(units) FROM "Register" r 
+	  JOIN "Course" USING(course_code) 
+	  WHERE r.amka = s.amka) >= (SELECT sr.min_units FROM "School_Rules" sr))	 
+GROUP BY entry_year;
